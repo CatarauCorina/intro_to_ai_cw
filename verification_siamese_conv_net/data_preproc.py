@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 import io
+import os
 import torch
 import torchvision
-import matplotlib.pyplot as plt
 import pandas as pd
 import PIL
 from PIL import Image
@@ -34,7 +34,7 @@ class CelebADataLoader(Dataset):
 
     def __init__(self, dataset_type='gt15',
                  root_dir='../one_shot_learning/data/img_alig_split/',
-                 gt15_dir='../one_shot_learning/data/img_alig_split_gt_15/'):
+                 gt15_dir=os.path.join(os.getcwd(),'..\\one_shot_learning\\data\\img_alig_split_gt_15\\img_alig_split_gt_15\\')):
         if dataset_type == 'gt15':
             self.root_dir = gt15_dir
         else:
@@ -118,10 +118,10 @@ class CelebADataLoader(Dataset):
         return loader
 
     def load_attributes_files(self, file_name='data/list_attr_celeba_processed.csv'):
-        self.img_attr = pd.read_csv('../one_shot_learning/data/list_attr_celeba_processed.csv')
+        self.img_attr = pd.read_csv(os.path.join(os.getcwd(),'..\\one_shot_learning\\data\\list_attr_celeba_processed.csv'))
         return self.img_attr
 
-    def load_labels_names_and_files(self, name='../one_shot_learning/data/data_labels_names.csv'):
+    def load_labels_names_and_files(self, name=os.path.join(os.getcwd(),'..\\one_shot_learning\\data\\data_labels_names.csv')):
         self.data_labels = pd.read_csv(name)
         return self.data_labels
 
@@ -135,8 +135,8 @@ class CelebADataLoader(Dataset):
                          split_size=0.8,
                          shuffle_dataset=True,
                          random_seed=42):
-        dataloader_shuffle = torch.utils.data.DataLoader(self.dataset, shuffle=shuffle_dataset)
-        dataset_size = len(dataloader_shuffle)
+        #dataloader_shuffle = torch.utils.data.DataLoader(self.dataset, shuffle=shuffle_dataset)
+        dataset_size = len(self.dataset)
         train_size = int(split_size * dataset_size)
         test_size = dataset_size - train_size
         train_dataset, test_dataset = torch.utils.data.random_split(
@@ -226,5 +226,16 @@ class SiameseDatasetCreator:
         for class_identity in sample_classes:
             pairs_class, target_class = self.create_pair_siamese(class_identity, type_ds)
             yield pairs_class, target_class
+
+def main():
+    siamese_in_creator = SiameseDatasetCreator()
+    nr_channels, height, width = siamese_in_creator.celeb_loader.dataset[0][0].shape
+    print(len(siamese_in_creator.celeb_loader.dataset))
+    train_siamese_data = siamese_in_creator.generate_verification_input(type_ds='train')
+    print(next(train_siamese_data))
+    return
+
+if __name__ == '__main__':
+    main()
 
 

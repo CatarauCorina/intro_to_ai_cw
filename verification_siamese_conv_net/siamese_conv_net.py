@@ -1,11 +1,12 @@
 import numpy as np
+import tensorflow as tf
 from tensorflow import keras as ks
 import data_preproc as dp
 
 
 def create_branch_of_network(image_shape):
     model = ks.Sequential()
-    model.add(ks.layers.Conv2D(64, kernel_size=10, activation='relu', input_shape=image_shape))
+    model.add(ks.layers.Conv2D(64, kernel_size=80, activation='relu', input_shape=image_shape))
     model.add(ks.layers.MaxPool2D(pool_size=2, strides=2))
     model.add(ks.layers.Conv2D(128, kernel_size=3, activation='relu'))
     model.add(ks.layers.MaxPool2D(pool_size=2, strides=2))
@@ -41,6 +42,10 @@ def create_siamese_network(image_shape):
 
 
 def main():
+    tf.debugging.set_log_device_placement(True)
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    tf.config.experimental.set_visible_devices(gpus[0], 'GPU')
+    logical_gpus = tf.config.experimental.list_logical_devices('GPU')
     siamese_in_creator = dp.SiameseDatasetCreator()
     nr_channels, height, width = siamese_in_creator.celeb_loader.dataset[0][0].shape
     model = create_siamese_network((height, width, nr_channels))
@@ -49,8 +54,9 @@ def main():
     train_siamese_data = siamese_in_creator.generate_verification_input(type_ds='train')
     model.fit_generator(generator=train_siamese_data,
                         steps_per_epoch=len(siamese_in_creator.celeb_loader.train_dataset),
-                        use_multiprocessing=True,
-                        workers=6)
+                        use_multiprocessing=False,
+                        verbose=1,
+                        workers=1)
     test_siamese_data = siamese_in_creator.generate_verification_input(type_ds='test')
     model.evaluate(x=test_siamese_data)
 

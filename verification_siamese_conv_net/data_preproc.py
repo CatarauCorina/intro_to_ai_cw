@@ -2,6 +2,8 @@
 
 import io
 import os
+import random
+
 import torch
 import torchvision
 import pandas as pd
@@ -34,7 +36,7 @@ class CelebADataLoader(Dataset):
 
     def __init__(self, dataset_type='gt15',
                  root_dir='../one_shot_learning/data/img_alig_split/',
-                 gt15_dir=os.path.join(os.getcwd(),'..\\one_shot_learning\\data\\img_alig_split_gt_15\\img_alig_split_gt_15\\')):
+                 gt15_dir=os.path.join(os.getcwd(),'..\\data\\img_alig_split_gt_15\\img_alig_split_gt_15\\'), split_size=0.8):
         if dataset_type == 'gt15':
             self.root_dir = gt15_dir
         else:
@@ -47,7 +49,7 @@ class CelebADataLoader(Dataset):
         self.data_paths = self.data_labels['path']
         self.identity_classes = list(pd.Series(self.dataset.targets).unique())
         self.transform = None
-        self.split_train_test()
+        self.split_train_test(split_size)
         return
 
     def __getitem__(self, idx):
@@ -78,7 +80,8 @@ class CelebADataLoader(Dataset):
     def load_data(self, dir_imgs):
         data_path = dir_imgs
         transform = transforms.Compose(
-            [transforms.ToTensor()])
+            [transforms.ToTensor(),
+             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
         train_dataset = CelebAImageFolderWithPaths(
             root=data_path,
             transform=transform
@@ -118,10 +121,10 @@ class CelebADataLoader(Dataset):
         return loader
 
     def load_attributes_files(self, file_name='data/list_attr_celeba_processed.csv'):
-        self.img_attr = pd.read_csv(os.path.join(os.getcwd(),'..\\one_shot_learning\\data\\list_attr_celeba_processed.csv'))
+        self.img_attr = pd.read_csv(os.path.join(os.getcwd(),'..\\data\\list_attr_celeba_processed.csv'))
         return self.img_attr
 
-    def load_labels_names_and_files(self, name=os.path.join(os.getcwd(),'..\\one_shot_learning\\data\\data_labels_names.csv')):
+    def load_labels_names_and_files(self, name=os.path.join(os.getcwd(),'..\\data\\data_labels_names.csv')):
         self.data_labels = pd.read_csv(name)
         return self.data_labels
 
@@ -142,20 +145,24 @@ class CelebADataLoader(Dataset):
         train_dataset, test_dataset = torch.utils.data.random_split(
             self.dataset, [train_size, test_size]
         )
-        self.train_dataset = train_dataset
-        self.test_dataset = test_dataset
         all_targets = self.dataset.targets
         train_indices = train_dataset.indices
-        test_indices = test_dataset.indices
+        self.train_dataset = train_dataset
+        if test_size != 0:
+            self.test_dataset = test_dataset
+            test_indices = test_dataset.indices
+            self.test_targets = list(itemgetter(*test_indices)(all_targets))
+        else:
+            test_dataset = None
         self.train_targets = list(itemgetter(*train_indices)(all_targets))
-        self.test_targets = list(itemgetter(*test_indices)(all_targets))
+
         return train_dataset, test_dataset
 
 
 class SiameseDatasetCreator:
 
-    def __init__(self):
-        self.celeb_loader = CelebADataLoader()
+    def __init__(self, split_size=0.8):
+        self.celeb_loader = CelebADataLoader(split_size=split_size)
 
     def filter_targets(self, type_ds):
         sample_classes = None
@@ -216,26 +223,90 @@ class SiameseDatasetCreator:
 
     # batch-size defines the number of pairs we need
     def generate_verification_input(self, nr_ex_class=10, batch_size=10, type_ds='train'):
+        while True:
+          if type_ds == 'train':
+            sample_classes = pd.Series(self.celeb_loader.train_targets).unique()
+            ds = self.celeb_loader.train_dataset
+          elif type_ds == 'test':
+            sample_classes = pd.Series(self.celeb_loader.test_targets).unique()
+            ds = self.celeb_loader.test_dataset
+
+          for class_identity in sample_classes:
+            pairs_class, target_class = self.create_pair_siamese(class_identity, type_ds)
+            yield pairs_class, target_class
+
+
+class PlasticDataCreator(SiameseDatasetCreator):
+
+    def __init__(self):
+        super(PlasticDataCreator, self).__init__()
+
+    def get_nr_classes(self, type_ds='train'):
         if type_ds == 'train':
             sample_classes = pd.Series(self.celeb_loader.train_targets).unique()
             ds = self.celeb_loader.train_dataset
         elif type_ds == 'test':
             sample_classes = pd.Series(self.celeb_loader.test_targets).unique()
             ds = self.celeb_loader.test_dataset
+        return sample_classes
 
-        for class_identity in sample_classes:
-            pairs_class, target_class = self.create_pair_siamese(class_identity, type_ds)
-            yield pairs_class, target_class
+    def get_random_class_images(self, type_ds='train', k=5):
+        sample_classes = self.filter_targets(type_ds)
+        idx_filtered = sample_classes.index
+        random_classes_idx = random.sample(list(idx_filtered), k)
+        random_class_to_pass_without_label = random.sample(random_classes_idx, 1)
+
+        class_1_data, nr_samples_class, filtered_idx = self.get_image_by_class(
+            class_val=list(sample_classes[random_class_to_pass_without_label])[0],
+            type_ds=type_ds
+        )
+        random_pick = random.sample(list(filtered_idx), 1)
+        random_classes_idx = random_classes_idx + random_pick
+        data_filtered = self.celeb_loader.get_data_subset(random_classes_idx, type_ds)
+        return data_filtered, random_classes_idx, \
+               sample_classes[random_classes_idx], \
+               sample_classes[random_pick]
+
+    def init_steps_array_and_target(self, nr_steps=6, type_ds='train'):
+        nr_classes = len(self.get_nr_classes(type_ds))
+        nr_channels, img_height, img_width = tuple(self.celeb_loader.dataset[0][0].shape)
+
+        input_step = np.zeros((nr_steps, 1,  nr_channels, img_height, img_width))
+        labels = np.zeros((nr_steps, 1,  nr_classes))
+        return input_step, labels
+
+    def create_input_plastic_network(self,  k_instances=5, nr_steps=6, type_ds='train'):
+        input_step, labels_step = self.init_steps_array_and_target(nr_steps, type_ds)
+        random_k_images, random_idx, rand_classes, class_without_label = self.get_random_class_images(type_ds, k_instances)
+
+        for step in range(nr_steps-1):
+            labels_step[step][0][rand_classes.iloc[step]] = 1
+
+        for idx, img in enumerate(random_k_images):
+            input_step[idx][0] = img[0]
+
+        target_class = labels_step[nr_steps-1]
+        target_class[0][rand_classes.iloc[nr_steps-1]] = 1
+
+        ttype = torch.FloatTensor
+        input_network = torch.from_numpy(input_step).type(ttype)  # Convert from numpy to pytorch Tensor
+        labels_network = torch.from_numpy(labels_step).type(ttype)
+        test_labels = torch.from_numpy(target_class).type(ttype)
+
+        return input_network, labels_network, test_labels
+
 
 def main():
-    siamese_in_creator = SiameseDatasetCreator()
-    nr_channels, height, width = siamese_in_creator.celeb_loader.dataset[0][0].shape
-    print(len(siamese_in_creator.celeb_loader.dataset))
-    train_siamese_data = siamese_in_creator.generate_verification_input(type_ds='train')
+    plastic_net = PlasticDataCreator()
+    plastic_net.create_input_plastic_network(type_ds='train')
+    siamese_net = SiameseDatasetCreator()
+    nr_channels, height, width = siamese_net.celeb_loader[0][0].shape
+    train_siamese_data = siamese_net.generate_verification_input(type_ds='train')
     print(next(train_siamese_data))
     return
 
 if __name__ == '__main__':
     main()
+
 
 
